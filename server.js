@@ -6,6 +6,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const User = require('./models/User'); // Adjust path as needed
 const Message = require('./models/Message'); // Add Message model import
+const rateLimit = require('express-rate-limit');
+const session = require('express-session');
+const MongoDBStore = require('connect-mongodb-session')(session);
 
 const authRoutes = require('./routes/authRoutes');
 const skillRoutes = require('./routes/skillRoutes');
@@ -25,10 +28,34 @@ const io = new Server(server, {
   },
 });
 
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each IP to 100 requests per windowMs
+  message: { error: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const store = new MongoDBStore({
+  uri: process.env.MONGO_URI,
+  collection: 'sessions',
+});
+
 app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-
+app.use(session({
+  secret: process.env.SESSION_SECRET, // Add to .env
+  resave: false,
+  saveUninitialized: false,
+  store: store,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // Use true in production with HTTPS
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  },
+}));
+app.use('/api/auth', limiter); // Apply to auth routes
 app.use('/api/auth', authRoutes);
 app.use('/api/skills', skillRoutes);
 app.use('/api/transactions', transactionRoutes);
