@@ -2,10 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const http = require('http');
+const https = require('https');  // Import https
+const fs = require('fs');  // Import fs to read the certificate files
 const { Server } = require('socket.io');
-const User = require('./models/User'); // Adjust path as needed
-const Message = require('./models/Message'); // Add Message model import
+const User = require('./models/User');
+const Message = require('./models/Message');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const MongoDBStore = require('connect-mongodb-session')(session);
@@ -19,7 +20,15 @@ const statsRoutes = require('./routes/statsRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 
 const app = express();
-const server = http.createServer(app);
+
+// Read the certificate files
+const options = {
+  key: fs.readFileSync('cert/server.key'),  // Path to your server's private key
+  cert: fs.readFileSync('cert/server.crt'),  // Path to your server's certificate
+  ca: fs.readFileSync('cert/root.crt')  // Path to the root certificate (optional)
+};
+
+const server = https.createServer(options, app);  // Create an HTTPS server using the certificate options
 const io = new Server(server, {
   cors: {
     origin: 'http://localhost:5173',
@@ -30,7 +39,7 @@ const io = new Server(server, {
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 100 requests per windowMs
+  max: 10, // Limit each IP to 10 requests per windowMs
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -55,6 +64,8 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   },
 }));
+
+// Routes
 app.use('/api/auth', limiter); // Apply to auth routes
 app.use('/api/auth', authRoutes);
 app.use('/api/skills', skillRoutes);
@@ -73,6 +84,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('Mongo connected'))
   .catch(err => console.error('Mongo connection error:', err));
 
+// Socket.io events
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
@@ -126,4 +138,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on https://localhost:${PORT}`));
