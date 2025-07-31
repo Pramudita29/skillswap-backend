@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
   name: String,
-  email: String,
+  email: { type: String, required: true, unique: true },
   password: String,
   location: String,
   bio: String,
@@ -12,7 +12,14 @@ const userSchema = new mongoose.Schema({
   completedSwaps: { type: Number, default: 0 },
   avgRating: { type: Number, default: 0 },
   firstTimeSetup: { type: Boolean, default: true },
+
+  // MFA login
   mfaCode: String,
+  mfaCodeExpires: Date,
+
+  // Password reset
+  passwordResetOtp: String,
+  passwordResetOtpExpiry: Date,
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);
