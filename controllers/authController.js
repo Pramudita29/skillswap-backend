@@ -39,7 +39,7 @@ exports.loginStepOne = async (req, res) => {
 
     const mfaCode = generateOtp();
     user.mfaCode = mfaCode;
-    user.mfaCodeExpires = Date.now() + 10 * 60 * 1000; // 10 min
+    user.mfaCodeExpires = new Date(Date.now() + 10 * 60 * 1000); // <-- Fix here: save as Date object
     await user.save();
 
     await sendOtpEmail(email, mfaCode);
@@ -64,7 +64,7 @@ exports.loginStepTwo = async (req, res) => {
       return res.status(400).json({ message: 'No OTP code found. Please request a new login.' });
     }
 
-    if (Date.now() > user.mfaCodeExpires) {
+    if (Date.now() > new Date(user.mfaCodeExpires).getTime()) {
       return res.status(400).json({ message: 'OTP expired. Please login again.' });
     }
 
@@ -117,7 +117,7 @@ exports.forgotPassword = async (req, res) => {
 
     const otp = generateOtp();
     user.passwordResetOtp = otp;
-    user.passwordResetOtpExpiry = Date.now() + 10 * 60 * 1000; // 10 mins
+    user.passwordResetOtpExpiry = new Date(Date.now() + 10 * 60 * 1000); // save as Date object
     await user.save();
 
     await sendOtpEmail(email, otp);
@@ -132,32 +132,41 @@ exports.forgotPassword = async (req, res) => {
 
 // Reset Password with OTP
 exports.resetPassword = async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({ message: 'All fields are required.' });
+  }
+
   try {
-    const { email, otp, newPassword } = req.body;
-    if (!email || !otp || !newPassword) {
-      return res.status(400).json({ message: 'Email, OTP, and new password are required.' });
-    }
-
     const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: 'Email not registered' });
 
-    if (!user.passwordResetOtp || !user.passwordResetOtpExpiry) {
-      return res.status(400).json({ message: 'OTP not found. Please request a new one.' });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
     }
 
-    const isOtpValid = user.passwordResetOtp === otp && Date.now() < user.passwordResetOtpExpiry;
-    if (!isOtpValid) {
+    // Check if OTP matches and is not expired
+    if (
+      user.passwordResetOtp !== otp ||
+      !user.passwordResetOtpExpiry ||
+      new Date(user.passwordResetOtpExpiry).getTime() < Date.now()
+    ) {
       return res.status(400).json({ message: 'Invalid or expired OTP.' });
     }
 
-    user.password = await bcrypt.hash(newPassword, 10);
-    user.passwordResetOtp = null;
-    user.passwordResetOtpExpiry = null;
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+
+    // Clear OTP fields after use
+    user.passwordResetOtp = undefined;
+    user.passwordResetOtpExpiry = undefined;
+
     await user.save();
 
-    res.json({ message: 'Password has been reset successfully.' });
+    return res.json({ message: 'Password has been reset successfully.' });
   } catch (err) {
     console.error('Reset password error:', err);
-    res.status(500).json({ message: 'Server error during password reset.' });
+    return res.status(500).json({ message: 'Internal server error.' });
   }
 };
