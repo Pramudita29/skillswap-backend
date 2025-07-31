@@ -31,7 +31,7 @@ const options = {
 const server = https.createServer(options, app);  // Create an HTTPS server using the certificate options
 const io = new Server(server, {
   cors: {
-    origin: 'http://localhost:5173',
+    origin: 'https://localhost:5173',
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -50,7 +50,7 @@ const store = new MongoDBStore({
   collection: 'sessions',
 });
 
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+app.use(cors({ origin: 'https://localhost:5173', credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(session({
