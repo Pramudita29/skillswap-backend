@@ -1,37 +1,28 @@
 // controllers/messageController.js
 const Message = require('../models/Message');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 
-// // GET /api/messages/:userId/:partnerId
-// exports.getMessages = async (req, res) => {
-//     try {
-//         const { userId, partnerId } = req.params;
-
-//         const messages = await Message.find({
-//             $or: [
-//                 { from: userId, to: partnerId },
-//                 { from: partnerId, to: userId },
-//             ],
-//         })
-//             .sort({ createdAt: 1 })
-//             .populate('from', 'name avatar')
-//             .populate('to', 'name avatar');
-
-//         if (!messages) {
-//             return res.status(404).json({ message: 'No messages found' });
-//         }
-
-//         res.json(messages);
-//     } catch (err) {
-//         console.error(err);
-//         res.status(500).json({ message: 'Server error' });
-//     }
-// };
 
 // POST /api/messages/send
 exports.sendMessage = async (req, res) => {
     try {
         const { from, to, text } = req.body;
+
+        // Validate ObjectIDs
+        if (!mongoose.Types.ObjectId.isValid(from) || !mongoose.Types.ObjectId.isValid(to)) {
+            return res.status(400).json({ message: 'Invalid sender or receiver ID' });
+        }
+
+        // Validate & sanitize text
+        if (typeof text !== 'string' || text.trim() === '') {
+            return res.status(400).json({ message: 'Text must be a non-empty string' });
+        }
+
+        // Optional: basic sanitization to avoid NoSQL ops
+        if (text.includes('$') || text.includes('{') || text.includes('}')) {
+            return res.status(400).json({ message: 'Text contains potentially unsafe characters' });
+        }
 
         const message = new Message({ from, to, text });
         await message.save();
@@ -41,10 +32,11 @@ exports.sendMessage = async (req, res) => {
             data: message,
         });
     } catch (err) {
-        console.error(err);
+        console.error('Message send error:', err);
         res.status(500).json({ message: 'Failed to send message' });
     }
 };
+
 
 // DELETE /api/messages/:messageId
 exports.deleteMessage = async (req, res) => {

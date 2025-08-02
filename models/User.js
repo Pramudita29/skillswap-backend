@@ -20,6 +20,15 @@ const userSchema = new mongoose.Schema({
   // Password reset
   passwordResetOtp: String,
   passwordResetOtpExpiry: Date,
+
+  // Login rate limiting
+  failedLoginAttempts: { type: Number, default: 0 },
+  lockUntil: { type: Date, default: null },
+
+  // NEW FIELDS
+  passwordChangedAt: { type: Date },
+  passwordHistory: [String], // store hashed passwords
+
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);

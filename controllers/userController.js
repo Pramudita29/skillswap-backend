@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 
-// GET /api/users/:userId
+// // GET /api/users/:userId
 exports.getUser = async (req, res) => {
   try {
     const userId = req.params.userId;
@@ -50,6 +50,11 @@ exports.getUser = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
 };
+
+
+//GET /api/users/me
+
+
 
 // PUT /api/users/:userId/profile
 exports.updateProfile = async (req, res) => {

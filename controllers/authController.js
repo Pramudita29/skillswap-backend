@@ -11,6 +11,15 @@ exports.registerUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
+    // Password complexity regex:
+    // Minimum 8 characters, at least one uppercase, one lowercase, one number, and one special character
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+    if (!passwordRegex.test(password)) {
+      return res.status(400).json({
+        message: 'Password must be at least 8 characters long and include uppercase, lowercase, number, and special character'
+      });
+    }
+
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: 'Email is already registered' });
@@ -26,24 +35,59 @@ exports.registerUser = async (req, res) => {
   }
 };
 
-// Login Step 1: Validate password, send OTP
+
+const LOCK_TIME = 10 * 60 * 1000; // 10 minutes
+const MAX_FAILED_ATTEMPTS = 5;
+const PASSWORD_EXPIRY_DAYS = 90;
+
 exports.loginStepOne = async (req, res) => {
   try {
     const { email, password } = req.body;
-
     const user = await User.findOne({ email });
+
     if (!user) return res.status(400).json({ message: 'Email not registered' });
 
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(400).json({ message: 'Incorrect password' });
+    // Check if account is locked
+    if (user.lockUntil && user.lockUntil > Date.now()) {
+      const waitSeconds = Math.ceil((user.lockUntil - Date.now()) / 1000);
+      return res.status(429).json({
+        message: `Account locked due to multiple failed attempts. Try again in ${waitSeconds} seconds.`,
+        lockTimeRemaining: waitSeconds,
+      });
+    }
 
+    // Validate password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      if (user.failedLoginAttempts >= MAX_FAILED_ATTEMPTS) {
+        user.lockUntil = new Date(Date.now() + LOCK_TIME);
+      }
+      await user.save();
+      return res.status(400).json({ message: 'Incorrect password' });
+    }
+
+    // Password matched — check expiry
+    const passwordAgeDays = Math.floor(
+      (Date.now() - new Date(user.passwordChangedAt || user.createdAt)) / (1000 * 60 * 60 * 24)
+    );
+
+    if (passwordAgeDays >= PASSWORD_EXPIRY_DAYS) {
+      return res.status(403).json({ message: 'Your password has expired. Please reset it.' });
+    }
+
+    //Login success, reset counters
+    user.failedLoginAttempts = 0;
+    user.lockUntil = null;
+
+    // Generate and store OTP for MFA
     const mfaCode = generateOtp();
     user.mfaCode = mfaCode;
-    user.mfaCodeExpires = new Date(Date.now() + 10 * 60 * 1000); // <-- Fix here: save as Date object
+    user.mfaCodeExpires = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
     await sendOtpEmail(email, mfaCode);
-    console.log(`📩 Sent login OTP to ${email}: ${mfaCode}`);
+    console.log(`Sent login OTP to ${email}: ${mfaCode}`);
 
     res.json({ message: 'OTP sent to your email.', userId: user._id });
   } catch (err) {
@@ -51,6 +95,7 @@ exports.loginStepOne = async (req, res) => {
     res.status(500).json({ message: 'Login failed. Please try again later.' });
   }
 };
+
 
 // Login Step 2: Verify OTP and issue token
 exports.loginStepTwo = async (req, res) => {
@@ -98,7 +143,28 @@ exports.updatePassword = async (req, res) => {
     const match = await bcrypt.compare(currentPassword, user.password);
     if (!match) return res.status(400).json({ message: 'Current password is incorrect' });
 
+    // Check for reuse
+    const reused = await Promise.any(
+      (user.passwordHistory || []).map(old => bcrypt.compare(newPassword, old))
+    ).catch(() => false);
+
+    if (reused) {
+      return res.status(400).json({ message: 'New password must not match any previously used passwords.' });
+    }
+
+    // Update password history
+    user.passwordHistory = (user.passwordHistory || []);
+    user.passwordHistory.push(user.password); // Store current password
+
+    // Keep last 5
+    if (user.passwordHistory.length > 5) {
+      user.passwordHistory = user.passwordHistory.slice(-5);
+    }
+
+    // Hash and update new password
     user.password = await bcrypt.hash(newPassword, 10);
+    user.passwordChangedAt = new Date();
+
     await user.save();
 
     res.json({ message: 'Password updated successfully' });
@@ -107,6 +173,7 @@ exports.updatePassword = async (req, res) => {
     res.status(500).json({ message: 'Password update failed. Please try again later.' });
   }
 };
+
 
 // Forgot Password (send OTP)
 exports.forgotPassword = async (req, res) => {
@@ -140,12 +207,8 @@ exports.resetPassword = async (req, res) => {
 
   try {
     const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'User not found.' });
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found.' });
-    }
-
-    // Check if OTP matches and is not expired
     if (
       user.passwordResetOtp !== otp ||
       !user.passwordResetOtpExpiry ||
@@ -154,11 +217,26 @@ exports.resetPassword = async (req, res) => {
       return res.status(400).json({ message: 'Invalid or expired OTP.' });
     }
 
-    // Hash the new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.password = hashedPassword;
+    // Check for reuse
+    const reused = await Promise.any(
+      (user.passwordHistory || []).map(old => bcrypt.compare(newPassword, old))
+    ).catch(() => false);
 
-    // Clear OTP fields after use
+    if (reused) {
+      return res.status(400).json({ message: 'New password must not match any previously used passwords.' });
+    }
+
+    // Update history
+    user.passwordHistory = (user.passwordHistory || []);
+    user.passwordHistory.push(user.password);
+    if (user.passwordHistory.length > 5) {
+      user.passwordHistory = user.passwordHistory.slice(-5);
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.passwordChangedAt = new Date();
+
+    // Clear OTP fields
     user.passwordResetOtp = undefined;
     user.passwordResetOtpExpiry = undefined;
 
